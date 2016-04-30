@@ -8,18 +8,18 @@ from theano import tensor as T
 
 class ChildSumTreeLSTM(tree_rnn.TreeRNN):
     def create_recursive_unit(self):
-        self.W_i = theano.shared(self.init_matrix([self.emb_dim, self.emb_dim]))
-        self.U_i = theano.shared(self.init_matrix([self.emb_dim, self.emb_dim]))
-        self.b_i = theano.shared(self.init_vector([self.emb_dim]))
-        self.W_f = theano.shared(self.init_matrix([self.emb_dim, self.emb_dim]))
-        self.U_f = theano.shared(self.init_matrix([self.emb_dim, self.emb_dim]))
-        self.b_f = theano.shared(self.init_vector([self.emb_dim]))
-        self.W_o = theano.shared(self.init_matrix([self.emb_dim, self.emb_dim]))
-        self.U_o = theano.shared(self.init_matrix([self.emb_dim, self.emb_dim]))
-        self.b_o = theano.shared(self.init_vector([self.emb_dim]))
-        self.W_u = theano.shared(self.init_matrix([self.emb_dim, self.emb_dim]))
-        self.U_u = theano.shared(self.init_matrix([self.emb_dim, self.emb_dim]))
-        self.b_u = theano.shared(self.init_vector([self.emb_dim]))
+        self.W_i = theano.shared(self.init_matrix([self.hidden_dim, self.emb_dim]))
+        self.U_i = theano.shared(self.init_matrix([self.hidden_dim, self.hidden_dim]))
+        self.b_i = theano.shared(self.init_vector([self.hidden_dim]))
+        self.W_f = theano.shared(self.init_matrix([self.hidden_dim, self.emb_dim]))
+        self.U_f = theano.shared(self.init_matrix([self.hidden_dim, self.hidden_dim]))
+        self.b_f = theano.shared(self.init_vector([self.hidden_dim]))
+        self.W_o = theano.shared(self.init_matrix([self.hidden_dim, self.emb_dim]))
+        self.U_o = theano.shared(self.init_matrix([self.hidden_dim, self.hidden_dim]))
+        self.b_o = theano.shared(self.init_vector([self.hidden_dim]))
+        self.W_u = theano.shared(self.init_matrix([self.hidden_dim, self.emb_dim]))
+        self.U_u = theano.shared(self.init_matrix([self.hidden_dim, self.hidden_dim]))
+        self.b_u = theano.shared(self.init_vector([self.hidden_dim]))
         self.params.extend([
             self.W_i, self.U_i, self.b_i,
             self.W_f, self.U_f, self.b_f,
@@ -39,7 +39,7 @@ class ChildSumTreeLSTM(tree_rnn.TreeRNN):
                  child_exists.dimshuffle(0, 'x'))
 
             c = i * u + T.sum(f * child_c, axis=0)
-            h = o * c
+            h = o * T.tanh(c)
             return h, c
 
         return unit
@@ -88,3 +88,74 @@ class ChildSumTreeLSTM(tree_rnn.TreeRNN):
             n_steps=num_nodes)
 
         return parent_h[-1]
+
+
+class NaryTreeLSTM(ChildSumTreeLSTM):
+    # we inherit from ChildSumTreeLSTM to re-use the compute_tree method
+
+    def create_recursive_unit(self):
+        self.W_i = theano.shared(self.init_matrix([self.hidden_dim, self.emb_dim]))
+        self.U_i = theano.shared(self.init_matrix(
+            [self.degree, self.hidden_dim, self.hidden_dim]))
+        self.b_i = theano.shared(self.init_vector([self.hidden_dim]))
+        self.W_f = theano.shared(self.init_matrix([self.hidden_dim, self.emb_dim]))
+        self.U_f = theano.shared(self.init_matrix(
+            [self.degree, self.degree, self.hidden_dim, self.hidden_dim]))
+        self.b_f = theano.shared(self.init_vector([self.hidden_dim]))
+        self.W_o = theano.shared(self.init_matrix([self.hidden_dim, self.emb_dim]))
+        self.U_o = theano.shared(self.init_matrix(
+            [self.degree, self.hidden_dim, self.hidden_dim]))
+        self.b_o = theano.shared(self.init_vector([self.hidden_dim]))
+        self.W_u = theano.shared(self.init_matrix([self.hidden_dim, self.emb_dim]))
+        self.U_u = theano.shared(self.init_matrix(
+            [self.degree, self.hidden_dim, self.hidden_dim]))
+        self.b_u = theano.shared(self.init_vector([self.hidden_dim]))
+        self.params.extend([
+            self.W_i, self.U_i, self.b_i,
+            self.W_f, self.U_f, self.b_f,
+            self.W_o, self.U_o, self.b_o,
+            self.W_u, self.U_u, self.b_u])
+
+        def unit(parent_x, child_h, child_c, child_exists):
+            (h_i, h_o, h_u), _ = theano.map(
+                fn=lambda Ui, Uo, Uu, h, exists:
+                    (exists * T.dot(Ui, h), exists * T.dot(Uo, h), exists * T.dot(Uu, h)),
+                sequences=[self.U_i, self.U_o, self.U_u, child_h, child_exists])
+
+            i = T.nnet.sigmoid(T.dot(self.W_i, parent_x) + h_i.sum(axis=0) + self.b_i)
+            o = T.nnet.sigmoid(T.dot(self.W_o, parent_x) + h_o.sum(axis=0) + self.b_o)
+            u = T.tanh(T.dot(self.W_u, parent_x) + h_u.sum(axis=0) + self.b_u)
+
+            def _sub_f(U):
+                sub_h_f, _ = theano.map(
+                    fn=lambda sub_U, h, exists: exists * T.dot(sub_U, h),
+                    sequences=[U, child_h, child_exists])
+                return sub_h_f.sum(axis=0)
+
+            h_f, _ = theano.map(
+                fn=lambda U: _sub_f(U),
+                sequences=[self.U_f])
+            f = (T.nnet.sigmoid(
+                    T.dot(self.W_f, parent_x).dimshuffle('x', 0) + h_f +
+                    self.b_f.dimshuffle('x', 0)) *
+                 child_exists.dimshuffle(0, 'x'))
+
+            c = i * u + T.sum(f * child_c, axis=0)
+            h = o * T.tanh(c)
+            return h, c
+
+        return unit
+
+    def create_leaf_unit(self):
+        self.h0 = theano.shared(self.init_vector([self.hidden_dim]))
+        self.c0 = theano.shared(self.init_vector([self.hidden_dim]))
+        self.params.extend([self.h0, self.c0])
+        dummy = 1 + 0 * theano.shared(self.init_vector([self.degree, 1]))
+
+        def unit(leaf_x):
+            return self.recursive_unit(
+                leaf_x,
+                T.dot(dummy, self.h0.reshape([1, self.hidden_dim])),
+                T.dot(dummy, self.c0.reshape([1, self.hidden_dim])),
+                dummy.reshape([self.degree]))
+        return unit
