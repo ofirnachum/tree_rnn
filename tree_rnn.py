@@ -204,21 +204,21 @@ class TreeRNN(object):
         return unit
 
     def compute_tree(self, emb_x, tree):
-        recursive_unit = self.create_recursive_unit()
-        leaf_unit = self.create_leaf_unit()
+        self.recursive_unit = self.create_recursive_unit()
+        self.leaf_unit = self.create_leaf_unit()
         num_nodes = tree.shape[0]  # num internal nodes
         num_leaves = self.num_words - num_nodes
 
         # compute leaf hidden states
         node_h, _ = theano.map(
-            fn=leaf_unit,
+            fn=self.leaf_unit,
             sequences=[emb_x[:num_leaves]])
 
         # use recurrence to compute internal node hidden states
         def _recurrence(cur_emb, node_info, t, node_h, last_h):
             child_exists = node_info > -1
             child_h = node_h[node_info - child_exists * t] * child_exists.dimshuffle(0, 'x')
-            parent_h = recursive_unit(cur_emb, child_h, child_exists)
+            parent_h = self.recursive_unit(cur_emb, child_h, child_exists)
             node_h = T.concatenate([node_h,
                                     parent_h.reshape([1, self.hidden_dim])])
             return node_h[1:], parent_h
@@ -328,13 +328,13 @@ class HierarchicalTreeRNN(object):
         return unit
 
     def compute_tree(self, emb_x, tree):
-        recursive_unit = self.create_recursive_unit()
+        self.recursive_unit = self.create_recursive_unit()
         num_nodes = tree.shape[0]  # num internal nodes
 
         def _recurrence(node_info, t, node_emb, last_emb):
             child_exists = node_info > -1
             child_emb = node_emb[node_info - t * child_exists] * child_exists.dimshuffle(0, 'x')
-            parent_emb = recursive_unit(child_emb, child_exists)
+            parent_emb = self.recursive_unit(child_emb, child_exists)
             node_emb = T.concatenate([node_emb,
                                       parent_emb.reshape([1, self.emb_dim])])
             return node_emb[1:], parent_emb
