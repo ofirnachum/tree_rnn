@@ -18,7 +18,24 @@ class Node(object):
         self.children.extend(other_children)
 
 
-def gen_nn_inputs(root_node, only_leaves_have_vals=True):
+class BinaryNode(Node):
+    def __init__(self, val=None):
+        self.children = []
+        self.val = val
+        self.idx = None
+
+    def add_left(self, node):
+        if not self.children:
+            self.children = [None, None]
+        self.children[0] = node
+
+    def add_right(self, node):
+        if not self.children:
+            self.children = [None, None]
+        self.children[1] = node
+
+
+def gen_nn_inputs(root_node, max_degree=None, only_leaves_have_vals=True):
     """Given a root node, returns the appropriate inputs to NN.
 
     The NN takes in
@@ -30,10 +47,12 @@ def gen_nn_inputs(root_node, only_leaves_have_vals=True):
 
     """
     x = _get_leaf_vals(root_node)
-    tree, internal_x = _get_tree_traversal(root_node, len(x))
+    tree, internal_x = _get_tree_traversal(root_node, len(x), max_degree)
     if not only_leaves_have_vals:
         assert all(v is not None for v in internal_x)
         x.extend(internal_x)
+    if max_degree is not None:
+        assert all(len(t) == max_degree + 1 for t in tree)
     return (np.array(x, dtype='int32'),
             np.array(tree, dtype='int32'))
 
@@ -48,7 +67,7 @@ def _get_leaf_vals(root_node):
             if not node.children:
                 all_leaves.append(node)
             else:
-                next_layer.extend(node.children[::-1])
+                next_layer.extend([child for child in node.children[::-1] if child])
         layer = next_layer
 
     vals = []
@@ -58,19 +77,25 @@ def _get_leaf_vals(root_node):
     return vals
 
 
-def _get_tree_traversal(root_node, start_idx=0):
+def _get_tree_traversal(root_node, start_idx=0, max_degree=None):
     """Get computation order of leaves -> root."""
     if not root_node.children:
         return [], []
     tree = []
     internal_vals = []
     for child in root_node.children:
-        subtree, vals = _get_tree_traversal(child, start_idx)
+        if child is None:
+            continue
+        subtree, vals = _get_tree_traversal(child, start_idx, max_degree)
         tree.extend(subtree)
         internal_vals.extend(vals)
         start_idx += len(subtree)
-    child_idxs = [child.idx for child in root_node.children]
+
+    child_idxs = [(child.idx if child else -1) for child in root_node.children]
+    if max_degree is not None:
+        child_idxs.extend([-1] * (max_degree - len(child_idxs)))
     assert not any(idx is None for idx in child_idxs)
+
     root_node.idx = start_idx
     tree.append(child_idxs + [root_node.idx])
     internal_vals.append(root_node.val)
@@ -135,8 +160,10 @@ class TreeRNN(object):
 
     def train_step_inner(self, x, tree, y):
         assert np.array_equal(tree[:, -1], np.arange(len(x) - len(tree), len(x)))
-        assert np.all(tree[:, 0] + 1 >= np.arange(len(tree)))
-        assert np.all(tree[:, 1] + 1 >= np.arange(len(tree)))
+        assert np.all((tree[:, 0] + 1 >= np.arange(len(tree))) |
+                      (tree[:, 0] == -1))
+        assert np.all((tree[:, 1] + 1 >= np.arange(len(tree))) |
+                      (tree[:, 1] == -1))
         return self._train(x, tree[:, :-1], y)
 
     def train_step(self, root_node, y):
@@ -146,8 +173,10 @@ class TreeRNN(object):
     def evaluate(self, root_node):
         x, tree = gen_nn_inputs(root_node, only_leaves_have_vals=False)
         assert np.array_equal(tree[:, -1], np.arange(len(x) - len(tree), len(x)))
-        assert np.all(tree[:, 0] + 1 >= np.arange(len(tree)))
-        assert np.all(tree[:, 1] + 1 >= np.arange(len(tree)))
+        assert np.all((tree[:, 0] + 1 >= np.arange(len(tree))) |
+                      (tree[:, 0] == -1))
+        assert np.all((tree[:, 1] + 1 >= np.arange(len(tree))) |
+                      (tree[:, 1] == -1))
         return self._evaluate(x, tree[:, :-1])
 
     def init_matrix(self, shape):
@@ -161,7 +190,7 @@ class TreeRNN(object):
         self.W_hh = theano.shared(self.init_matrix([self.hidden_dim, self.hidden_dim]))
         self.b_h = theano.shared(self.init_vector([self.hidden_dim]))
         self.params.extend([self.W_hx, self.W_hh, self.b_h])
-        def unit(parent_x, child_h):  # very simple
+        def unit(parent_x, child_h, child_exists):  # very simple
             h_tilde = T.sum(child_h, axis=0)
             h = T.tanh(self.b_h + T.dot(self.W_hx, parent_x) + T.dot(self.W_hh, h_tilde))
             return h
@@ -187,8 +216,9 @@ class TreeRNN(object):
 
         # use recurrence to compute internal node hidden states
         def _recurrence(cur_emb, node_info, t, node_h, last_h):
-            child_h = node_h[node_info - t]
-            parent_h = recursive_unit(cur_emb, child_h)
+            child_exists = node_info > -1
+            child_h = node_h[node_info - child_exists * t] * child_exists.dimshuffle(0, 'x')
+            parent_h = recursive_unit(cur_emb, child_h, child_exists)
             node_h = T.concatenate([node_h,
                                     parent_h.reshape([1, self.hidden_dim])])
             return node_h[1:], parent_h
@@ -262,8 +292,10 @@ class HierarchicalTreeRNN(object):
 
     def train_step_inner(self, x, tree, y):
         assert np.array_equal(tree[:, -1], np.arange(len(x), len(x) + len(tree)))
-        assert np.all(tree[:, 0] + 1 >= np.arange(len(tree)))
-        assert np.all(tree[:, 1] + 1 >= np.arange(len(tree)))
+        assert np.all((tree[:, 0] + 1 >= np.arange(len(tree))) |
+                      (tree[:, 0] == -1))
+        assert np.all((tree[:, 1] + 1 >= np.arange(len(tree))) |
+                      (tree[:, 1] == -1))
         return self._train(x, tree[:, :-1], y)
 
     def train_step(self, root_node, y):
@@ -273,8 +305,10 @@ class HierarchicalTreeRNN(object):
     def evaluate(self, root_node):
         x, tree = gen_nn_inputs(root_node)
         assert np.array_equal(tree[:, -1], np.arange(len(x), len(x) + len(tree)))
-        assert np.all(tree[:, 0] + 1 >= np.arange(len(tree)))
-        assert np.all(tree[:, 1] + 1 >= np.arange(len(tree)))
+        assert np.all((tree[:, 0] + 1 >= np.arange(len(tree))) |
+                      (tree[:, 0] == -1))
+        assert np.all((tree[:, 1] + 1 >= np.arange(len(tree))) |
+                      (tree[:, 1] == -1))
         return self._evaluate(x, tree[:, :-1])
 
     def init_matrix(self, shape):
@@ -287,7 +321,7 @@ class HierarchicalTreeRNN(object):
         self.W_rec = theano.shared(self.init_matrix([self.emb_dim, self.emb_dim]))
         self.h_rec = theano.shared(self.init_vector([self.emb_dim]))
         self.params.extend([self.W_rec, self.h_rec])
-        def unit(child_emb):  # very simple
+        def unit(child_emb, child_exists):  # very simple
             mean_emb = T.sum(child_emb, axis=0)
             next_emb = T.tanh(self.h_rec + T.dot(self.W_rec, mean_emb))
             return next_emb
@@ -298,8 +332,9 @@ class HierarchicalTreeRNN(object):
         num_nodes = tree.shape[0]  # num internal nodes
 
         def _recurrence(node_info, t, node_emb, last_emb):
-            child_emb = node_emb[node_info - t]
-            parent_emb = recursive_unit(child_emb)
+            child_exists = node_info > -1
+            child_emb = node_emb[node_info - t * child_exists] * child_exists.dimshuffle(0, 'x')
+            parent_emb = recursive_unit(child_emb, child_exists)
             node_emb = T.concatenate([node_emb,
                                       parent_emb.reshape([1, self.emb_dim])])
             return node_emb[1:], parent_emb

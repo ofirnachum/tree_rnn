@@ -9,8 +9,22 @@ from numpy.testing import assert_array_almost_equal
 class DummyTreeRNN(tree_rnn.TreeRNN):
 
     def create_recursive_unit(self):
-        def unit(parent_x, child_h):  # assumes emb_dim == hidden_dim
+        def unit(parent_x, child_h, child_exists):  # assumes emb_dim == hidden_dim
             return parent_x + T.prod(child_h, axis=0)
+        return unit
+
+    def create_leaf_unit(self):
+        def unit(leaf_x):  # assumes emb_dim == hidden_dim
+            return leaf_x
+        return unit
+
+
+class DummyBinaryRNN(tree_rnn.TreeRNN):
+
+    def create_recursive_unit(self):
+        def unit(parent_x, child_h, child_exists):  # assumes emb_dim == hidden_dim
+            return (parent_x + child_exists[0] * child_h[0] +
+                    child_exists[1] * child_h[1] ** 2)
         return unit
 
     def create_leaf_unit(self):
@@ -22,8 +36,17 @@ class DummyTreeRNN(tree_rnn.TreeRNN):
 class DummyHierarchicalRNN(tree_rnn.HierarchicalTreeRNN):
 
     def create_recursive_unit(self):
-        def unit(child_emb):
+        def unit(child_emb, child_exists):
             return 1.0 + T.prod(child_emb, axis=0)
+        return unit
+
+
+class DummyHierarchicalBinaryRNN(tree_rnn.HierarchicalTreeRNN):
+
+    def create_recursive_unit(self):
+        def unit(child_emb, child_exists):  # assumes emb_dim == hidden_dim
+            return (1.0 + child_exists[0] * child_emb[0] +
+                    child_exists[1] * child_emb[1] ** 2)
         return unit
 
 
@@ -94,6 +117,35 @@ def test_tree_rnn():
     model.train_step(root, np.array([0]).astype(theano.config.floatX))
 
 
+def test_tree_rnn_var_degree():
+    model = DummyBinaryRNN(10, 2, 2, 1, degree=2)
+    emb = model.embeddings.get_value()
+
+    root = tree_rnn.BinaryNode(0)
+    c1 = tree_rnn.BinaryNode(1)
+    cc1 = tree_rnn.BinaryNode(2)
+    ccc1 = tree_rnn.BinaryNode(3)
+    cc1.add_left(ccc1)
+    c1.add_right(cc1)
+    root.add_left(c1)
+
+    root_emb = model.evaluate(root)
+    expected = emb[0] + (emb[1] + (emb[2] + emb[3]) ** 2)
+    assert_array_almost_equal(expected, root_emb)
+
+    cccc1 = tree_rnn.BinaryNode(5)
+    cccc2 = tree_rnn.BinaryNode(6)
+    ccc1.add_left(cccc1)
+    ccc1.add_right(cccc2)
+
+    root_emb = model.evaluate(root)
+    expected = emb[0] + (emb[1] + (emb[2] + (emb[3] + emb[5] + emb[6] ** 2)) ** 2)
+    assert_array_almost_equal(expected, root_emb)
+
+    # check step works without error
+    model.train_step(root, np.array([0]).astype(theano.config.floatX))
+
+
 def test_hierarchical_tree_rnn():
     model = DummyHierarchicalRNN(8, 2, 1, degree=2)
     leaf_emb = model.embeddings.get_value()
@@ -157,6 +209,35 @@ def test_hierarchical_tree_rnn():
         1 + ((1 + leaf_emb[1] * leaf_emb[2] * leaf_emb[3]) *
              (1 + leaf_emb[4] * leaf_emb[5] * leaf_emb[6]) *
              (1 + leaf_emb[7] * leaf_emb[8] * leaf_emb[9]))
+    assert_array_almost_equal(expected, root_emb)
+
+    # check step works without error
+    model.train_step(root, np.array([0]).astype(theano.config.floatX))
+
+
+def test_hierarchical_tree_rnn_var_degree():
+    model = DummyHierarchicalBinaryRNN(10, 2, 1, degree=2)
+    emb = model.embeddings.get_value()
+
+    root = tree_rnn.BinaryNode()
+    c1 = tree_rnn.BinaryNode()
+    cc1 = tree_rnn.BinaryNode()
+    ccc1 = tree_rnn.BinaryNode(3)
+    cc1.add_left(ccc1)
+    c1.add_right(cc1)
+    root.add_left(c1)
+
+    root_emb = model.evaluate(root)
+    expected = 1 + (1 + (1 + emb[3]) ** 2)
+    assert_array_almost_equal(expected, root_emb)
+
+    cccc1 = tree_rnn.BinaryNode(5)
+    cccc2 = tree_rnn.BinaryNode(6)
+    ccc1.add_left(cccc1)
+    ccc1.add_right(cccc2)
+
+    root_emb = model.evaluate(root)
+    expected = 1 + (1 + (1 + (1 + emb[5] + emb[6] ** 2)) ** 2)
     assert_array_almost_equal(expected, root_emb)
 
     # check step works without error
