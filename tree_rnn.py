@@ -167,11 +167,11 @@ class TreeRNN(object):
         return self._train(x, tree[:, :-1], y)
 
     def train_step(self, root_node, y):
-        x, tree = gen_nn_inputs(root_node, only_leaves_have_vals=False)
+        x, tree = gen_nn_inputs(root_node, max_degree=self.degree, only_leaves_have_vals=False)
         return self.train_step_inner(x, tree, y)
 
     def evaluate(self, root_node):
-        x, tree = gen_nn_inputs(root_node, only_leaves_have_vals=False)
+        x, tree = gen_nn_inputs(root_node, max_degree=self.degree, only_leaves_have_vals=False)
         assert np.array_equal(tree[:, -1], np.arange(len(x) - len(tree), len(x)))
         assert np.all((tree[:, 0] + 1 >= np.arange(len(tree))) |
                       (tree[:, 0] == -1))
@@ -299,11 +299,11 @@ class HierarchicalTreeRNN(object):
         return self._train(x, tree[:, :-1], y)
 
     def train_step(self, root_node, y):
-        x, tree = gen_nn_inputs(root_node)
+        x, tree = gen_nn_inputs(root_node, max_degree=self.degree)
         return self.train_step_inner(x, tree, y)
 
     def evaluate(self, root_node):
-        x, tree = gen_nn_inputs(root_node)
+        x, tree = gen_nn_inputs(root_node, max_degree=self.degree)
         assert np.array_equal(tree[:, -1], np.arange(len(x), len(x) + len(tree)))
         assert np.all((tree[:, 0] + 1 >= np.arange(len(tree))) |
                       (tree[:, 0] == -1))
