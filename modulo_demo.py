@@ -18,8 +18,7 @@ MAX_DEPTH = 4
 
 def get_trainable_model():
     # change this to the model of your choosing
-    #model = tree_rnn.TreeRNN(NUM_EMB, EMB_DIM, HIDDEN_DIM, OUTPUT_DIM,
-    model = tree_lstm.NaryTreeLSTM(NUM_EMB, EMB_DIM, HIDDEN_DIM, OUTPUT_DIM,
+    model = tree_rnn.TreeRNN(NUM_EMB, EMB_DIM, HIDDEN_DIM, OUTPUT_DIM,
                              trainable_embeddings=False)
     model.embeddings.set_value(
         np.arange(NUM_EMB * EMB_DIM).reshape([NUM_EMB, EMB_DIM]).
