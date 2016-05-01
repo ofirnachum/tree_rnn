@@ -179,6 +179,15 @@ class TreeRNN(object):
                       (tree[:, 1] == -1))
         return self._evaluate(x, tree[:, :-1])
 
+    def predict(self, root_node):
+        x, tree = gen_nn_inputs(root_node, max_degree=self.degree, only_leaves_have_vals=False)
+        assert np.array_equal(tree[:, -1], np.arange(len(x) - len(tree), len(x)))
+        assert np.all((tree[:, 0] + 1 >= np.arange(len(tree))) |
+                      (tree[:, 0] == -1))
+        assert np.all((tree[:, 1] + 1 >= np.arange(len(tree))) |
+                      (tree[:, 1] == -1))
+        return self._predict(x, tree[:, :-1])
+
     def init_matrix(self, shape):
         return np.random.normal(scale=0.1, size=shape).astype(theano.config.floatX)
 
@@ -310,6 +319,15 @@ class HierarchicalTreeRNN(object):
         assert np.all((tree[:, 1] + 1 >= np.arange(len(tree))) |
                       (tree[:, 1] == -1))
         return self._evaluate(x, tree[:, :-1])
+
+    def evaluate(self, root_node):
+        x, tree = gen_nn_inputs(root_node, max_degree=self.degree)
+        assert np.array_equal(tree[:, -1], np.arange(len(x), len(x) + len(tree)))
+        assert np.all((tree[:, 0] + 1 >= np.arange(len(tree))) |
+                      (tree[:, 0] == -1))
+        assert np.all((tree[:, 1] + 1 >= np.arange(len(tree))) |
+                      (tree[:, 1] == -1))
+        return self._predict(x, tree[:, :-1])
 
     def init_matrix(self, shape):
         return np.random.normal(scale=0.1, size=shape).astype(theano.config.floatX)
