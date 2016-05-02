@@ -50,18 +50,16 @@ class ChildSumTreeGRU(tree_rnn.TreeRNN):
         return unit
 
     def create_leaf_unit(self):
-        self.h0 = theano.shared(self.init_vector([self.hidden_dim]))
-        self.params.append(self.h0)
-        dummy = 1 + 0 * theano.shared(self.init_vector([1]))
+        dummy = theano.shared(self.init_vector([self.degree, self.hidden_dim]))
         def unit(leaf_x):
             return self.recursive_unit(
                 leaf_x,
-                self.h0.reshape([1, self.hidden_dim]),
-                dummy)
+                dummy,
+                1 + dummy.sum(axis=1))
         return unit
 
 
-class NaryTreeGRU(tree_rnn.TreeRNN):
+class NaryTreeGRU(ChildSumTreeGRU):
     # TODO: try a more analgous to LSTM degree ** 2 version
 
     def create_recursive_unit(self):
@@ -94,15 +92,4 @@ class NaryTreeGRU(tree_rnn.TreeRNN):
             h = (1 - T.sum(z, axis=0)) * h_hat + T.sum(z * child_h, axis=0)
             return h
 
-        return unit
-
-    def create_leaf_unit(self):
-        self.h0 = theano.shared(self.init_vector([self.hidden_dim]))
-        self.params.append(self.h0)
-        dummy = 1 + 0 * theano.shared(self.init_vector([self.degree, 1]))
-        def unit(leaf_x):
-            return self.recursive_unit(
-                leaf_x,
-                T.dot(dummy, self.h0.reshape([1, self.hidden_dim])),
-                dummy.reshape([self.degree]))
         return unit

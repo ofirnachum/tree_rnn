@@ -45,16 +45,13 @@ class ChildSumTreeLSTM(tree_rnn.TreeRNN):
         return unit
 
     def create_leaf_unit(self):
-        self.h0 = theano.shared(self.init_vector([self.hidden_dim]))
-        self.c0 = theano.shared(self.init_vector([self.hidden_dim]))
-        self.params.extend([self.h0, self.c0])
-        dummy = 1 + 0 * theano.shared(self.init_vector([1]))
+        dummy = 0 * theano.shared(self.init_vector([self.degree, self.hidden_dim]))
         def unit(leaf_x):
             return self.recursive_unit(
                 leaf_x,
-                self.h0.reshape([1, self.hidden_dim]),
-                self.c0.reshape([1, self.hidden_dim]),
-                dummy)
+                dummy,
+                dummy,
+                dummy.sum(axis=1))
         return unit
 
     def compute_tree(self, emb_x, tree):
@@ -144,18 +141,4 @@ class NaryTreeLSTM(ChildSumTreeLSTM):
             h = o * T.tanh(c)
             return h, c
 
-        return unit
-
-    def create_leaf_unit(self):
-        self.h0 = theano.shared(self.init_vector([self.hidden_dim]))
-        self.c0 = theano.shared(self.init_vector([self.hidden_dim]))
-        self.params.extend([self.h0, self.c0])
-        dummy = 1 + 0 * theano.shared(self.init_vector([self.degree, 1]))
-
-        def unit(leaf_x):
-            return self.recursive_unit(
-                leaf_x,
-                T.dot(dummy, self.h0.reshape([1, self.hidden_dim])),
-                T.dot(dummy, self.c0.reshape([1, self.hidden_dim])),
-                dummy.reshape([self.degree]))
         return unit

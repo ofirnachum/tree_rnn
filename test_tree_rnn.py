@@ -33,23 +33,6 @@ class DummyBinaryRNN(tree_rnn.TreeRNN):
         return unit
 
 
-class DummyHierarchicalRNN(tree_rnn.HierarchicalTreeRNN):
-
-    def create_recursive_unit(self):
-        def unit(child_emb, child_exists):
-            return 1.0 + T.prod(child_emb, axis=0)
-        return unit
-
-
-class DummyHierarchicalBinaryRNN(tree_rnn.HierarchicalTreeRNN):
-
-    def create_recursive_unit(self):
-        def unit(child_emb, child_exists):  # assumes emb_dim == hidden_dim
-            return (1.0 + child_exists[0] * child_emb[0] +
-                    child_exists[1] * child_emb[1] ** 2)
-        return unit
-
-
 def test_tree_rnn():
     model = DummyTreeRNN(8, 2, 2, 1, degree=2)
     emb = model.embeddings.get_value()
@@ -140,104 +123,6 @@ def test_tree_rnn_var_degree():
 
     root_emb = model.evaluate(root)
     expected = emb[0] + (emb[1] + (emb[2] + (emb[3] + emb[5] + emb[6] ** 2)) ** 2)
-    assert_array_almost_equal(expected, root_emb)
-
-    # check step works without error
-    model.train_step(root, np.array([0]).astype(theano.config.floatX))
-
-
-def test_hierarchical_tree_rnn():
-    model = DummyHierarchicalRNN(8, 2, 1, degree=2)
-    leaf_emb = model.embeddings.get_value()
-
-    root = tree_rnn.Node()
-    c1 = tree_rnn.Node(1)
-    c2 = tree_rnn.Node(2)
-    root.add_children([c1, c2])
-
-    root_emb = model.evaluate(root)
-    expected = 1 + leaf_emb[1] * leaf_emb[2]
-    assert_array_almost_equal(expected, root_emb)
-
-    cc1 = tree_rnn.Node(5)
-    cc2 = tree_rnn.Node(2)
-    c2.val = None
-    c2.add_children([cc1, cc2])
-
-    root_emb = model.evaluate(root)
-    expected = 1 + (1 + leaf_emb[5] * leaf_emb[2]) * leaf_emb[1]
-    assert_array_almost_equal(expected, root_emb)
-
-    ccc1 = tree_rnn.Node(5)
-    ccc2 = tree_rnn.Node(4)
-    cc1.val = None
-    cc1.add_children([ccc1, ccc2])
-
-    root_emb = model.evaluate(root)
-    expected = 1 + (1 + (1 + leaf_emb[5] * leaf_emb[4]) * leaf_emb[2]) * leaf_emb[1]
-    assert_array_almost_equal(expected, root_emb)
-
-    # check step works without error
-    model.train_step(root, np.array([0]).astype(theano.config.floatX))
-
-    # degree > 2
-    model = DummyHierarchicalRNN(10, 2, 1, degree=3)
-    leaf_emb = model.embeddings.get_value()
-
-    root = tree_rnn.Node()
-    c1 = tree_rnn.Node(1)
-    c2 = tree_rnn.Node(2)
-    c3 = tree_rnn.Node(3)
-    root.add_children([c1, c2, c3])
-
-    cc1 = tree_rnn.Node(1)
-    cc2 = tree_rnn.Node(2)
-    cc3 = tree_rnn.Node(3)
-    cc4 = tree_rnn.Node(4)
-    cc5 = tree_rnn.Node(5)
-    cc6 = tree_rnn.Node(6)
-    cc7 = tree_rnn.Node(7)
-    cc8 = tree_rnn.Node(8)
-    cc9 = tree_rnn.Node(9)
-
-    c1.add_children([cc1, cc2, cc3])
-    c2.add_children([cc4, cc5, cc6])
-    c3.add_children([cc7, cc8, cc9])
-
-    root_emb = model.evaluate(root)
-    expected = \
-        1 + ((1 + leaf_emb[1] * leaf_emb[2] * leaf_emb[3]) *
-             (1 + leaf_emb[4] * leaf_emb[5] * leaf_emb[6]) *
-             (1 + leaf_emb[7] * leaf_emb[8] * leaf_emb[9]))
-    assert_array_almost_equal(expected, root_emb)
-
-    # check step works without error
-    model.train_step(root, np.array([0]).astype(theano.config.floatX))
-
-
-def test_hierarchical_tree_rnn_var_degree():
-    model = DummyHierarchicalBinaryRNN(10, 2, 1, degree=2)
-    emb = model.embeddings.get_value()
-
-    root = tree_rnn.BinaryNode()
-    c1 = tree_rnn.BinaryNode()
-    cc1 = tree_rnn.BinaryNode()
-    ccc1 = tree_rnn.BinaryNode(3)
-    cc1.add_left(ccc1)
-    c1.add_right(cc1)
-    root.add_left(c1)
-
-    root_emb = model.evaluate(root)
-    expected = 1 + (1 + (1 + emb[3]) ** 2)
-    assert_array_almost_equal(expected, root_emb)
-
-    cccc1 = tree_rnn.BinaryNode(5)
-    cccc2 = tree_rnn.BinaryNode(6)
-    ccc1.add_left(cccc1)
-    ccc1.add_right(cccc2)
-
-    root_emb = model.evaluate(root)
-    expected = 1 + (1 + (1 + (1 + emb[5] + emb[6] ** 2)) ** 2)
     assert_array_almost_equal(expected, root_emb)
 
     # check step works without error
