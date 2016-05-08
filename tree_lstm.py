@@ -61,7 +61,7 @@ class ChildSumTreeLSTM(tree_rnn.TreeRNN):
         num_leaves = self.num_words - num_nodes
 
         # compute leaf hidden states
-        (node_h, node_c), _ = theano.map(
+        (leaf_h, leaf_c), _ = theano.map(
             fn=self.leaf_unit,
             sequences=[emb_x[:num_leaves]])
 
@@ -80,11 +80,11 @@ class ChildSumTreeLSTM(tree_rnn.TreeRNN):
         dummy = theano.shared(self.init_vector([self.hidden_dim]))
         (_, _, parent_h), _ = theano.scan(
             fn=_recurrence,
-            outputs_info=[node_h, node_c, dummy],
+            outputs_info=[leaf_h, leaf_c, dummy],
             sequences=[emb_x[num_leaves:], tree, T.arange(num_nodes)],
             n_steps=num_nodes)
 
-        return parent_h[-1]
+        return T.concatenate([leaf_h, parent_h], axis=0)
 
 
 class NaryTreeLSTM(ChildSumTreeLSTM):

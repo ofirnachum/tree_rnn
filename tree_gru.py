@@ -50,7 +50,7 @@ class ChildSumTreeGRU(tree_rnn.TreeRNN):
         return unit
 
     def create_leaf_unit(self):
-        dummy = theano.shared(self.init_vector([self.degree, self.hidden_dim]))
+        dummy = 0 * theano.shared(self.init_vector([self.degree, self.hidden_dim]))
         def unit(leaf_x):
             return self.recursive_unit(
                 leaf_x,

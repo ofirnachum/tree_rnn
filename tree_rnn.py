@@ -3,6 +3,7 @@ __doc__ = """Tree RNNs aka Recursive Neural Networks."""
 import numpy as np
 import theano
 from theano import tensor as T
+from theano.compat.python2x import OrderedDict
 
 
 theano.config.floatX = 'float32'
@@ -17,6 +18,7 @@ class Node(object):
         self.size = 1
         self.num_leaves = 1
         self.parent = None
+        self.label = None
 
     def _update(self):
         self.height = 1 + max([child.height for child in self.children if child] or [0])
@@ -67,7 +69,8 @@ class BinaryNode(Node):
         return self.children[1]
 
 
-def gen_nn_inputs(root_node, max_degree=None, only_leaves_have_vals=True):
+def gen_nn_inputs(root_node, max_degree=None, only_leaves_have_vals=True,
+                  with_labels=False):
     """Given a root node, returns the appropriate inputs to NN.
 
     The NN takes in
@@ -78,16 +81,31 @@ def gen_nn_inputs(root_node, max_degree=None, only_leaves_have_vals=True):
             f(a, b) -> c should happen on step i.
 
     """
-    x = _get_leaf_vals(root_node)
-    tree, internal_x = _get_tree_traversal(root_node, len(x), max_degree)
+    _clear_indices(root_node)
+    x, leaf_labels = _get_leaf_vals(root_node)
+    tree, internal_x, internal_labels = \
+        _get_tree_traversal(root_node, len(x), max_degree)
     assert all(v is not None for v in x)
     if not only_leaves_have_vals:
         assert all(v is not None for v in internal_x)
         x.extend(internal_x)
     if max_degree is not None:
         assert all(len(t) == max_degree + 1 for t in tree)
+    if with_labels:
+        labels = leaf_labels + internal_labels
+        labels_exist = [l is not None for l in labels]
+        labels = [l or 0 for l in labels]
+        return (np.array(x, dtype='int32'),
+                np.array(tree, dtype='int32'),
+                np.array(labels, dtype=theano.config.floatX),
+                np.array(labels_exist, dtype=theano.config.floatX))
     return (np.array(x, dtype='int32'),
             np.array(tree, dtype='int32'))
+
+
+def _clear_indices(root_node):
+    root_node.idx = None
+    [_clear_indices(child) for child in root_node.children if child]
 
 
 def _get_leaf_vals(root_node):
@@ -97,42 +115,58 @@ def _get_leaf_vals(root_node):
     while layer:
         next_layer = []
         for node in layer:
-            if not node.children:
+            if all(child is None for child in node.children):
                 all_leaves.append(node)
             else:
                 next_layer.extend([child for child in node.children[::-1] if child])
         layer = next_layer
 
     vals = []
+    labels = []
     for idx, leaf in enumerate(reversed(all_leaves)):
         leaf.idx = idx
         vals.append(leaf.val)
-    return vals
+        labels.append(leaf.label)
+    return vals, labels
 
 
 def _get_tree_traversal(root_node, start_idx=0, max_degree=None):
     """Get computation order of leaves -> root."""
     if not root_node.children:
-        return [], []
+        return [], [], []
+    layers = []
+    layer = [root_node]
+    while layer:
+        layers.append(layer[:])
+        next_layer = []
+        [next_layer.extend([child for child in node.children if child])
+         for node in layer]
+        layer = next_layer
+
     tree = []
     internal_vals = []
-    for child in root_node.children:
-        if child is None:
-            continue
-        subtree, vals = _get_tree_traversal(child, start_idx, max_degree)
-        tree.extend(subtree)
-        internal_vals.extend(vals)
-        start_idx += len(subtree)
+    labels = []
+    idx = start_idx
+    for layer in reversed(layers):
+        for node in layer:
+            if node.idx is not None:
+                # must be leaf
+                assert all(child is None for child in node.children)
+                continue
 
-    child_idxs = [(child.idx if child else -1) for child in root_node.children]
-    if max_degree is not None:
-        child_idxs.extend([-1] * (max_degree - len(child_idxs)))
-    assert not any(idx is None for idx in child_idxs)
+            child_idxs = [(child.idx if child else -1)
+                          for child in node.children]
+            if max_degree is not None:
+                child_idxs.extend([-1] * (max_degree - len(child_idxs)))
+            assert not any(idx is None for idx in child_idxs)
 
-    root_node.idx = start_idx
-    tree.append(child_idxs + [root_node.idx])
-    internal_vals.append(root_node.val if root_node.val is not None else -1)
-    return tree, internal_vals
+            node.idx = idx
+            tree.append(child_idxs + [node.idx])
+            internal_vals.append(node.val if node.val is not None else -1)
+            labels.append(node.label)
+            idx += 1
+
+    return tree, internal_vals, labels
 
 
 class TreeRNN(object):
@@ -149,8 +183,9 @@ class TreeRNN(object):
     """
 
     def __init__(self, num_emb, emb_dim, hidden_dim, output_dim,
-                 degree=2, learning_rate=0.01,
-                 trainable_embeddings=True):
+                 degree=2, learning_rate=0.01, momentum=0.9,
+                 trainable_embeddings=True,
+                 labels_on_nonroot_nodes=False):
         assert emb_dim > 1 and hidden_dim > 1
         self.num_emb = num_emb
         self.emb_dim = emb_dim
@@ -158,34 +193,42 @@ class TreeRNN(object):
         self.output_dim = output_dim
         self.degree = degree
         self.learning_rate = learning_rate
+        self.momentum = momentum
 
         self.params = []
         self.embeddings = theano.shared(self.init_matrix([self.num_emb, self.emb_dim]))
-        self.W_out = theano.shared(self.init_matrix([self.output_dim, self.hidden_dim]))
-        self.b_out = theano.shared(self.init_vector([self.output_dim]))
         if trainable_embeddings:
             self.params.append(self.embeddings)
-        self.params.extend([self.W_out, self.b_out])
 
         self.x = T.ivector(name='x')  # word indices
         self.tree = T.imatrix(name='tree')  # shape [None, self.degree]
-        self.y = T.fvector(name='y')  # output shape [self.output_dim]
+        if labels_on_nonroot_nodes:
+            self.y = T.fmatrix(name='y')  # output shape [None, self.output_dim]
+            self.y_exists = T.fvector(name='y_exists')  # shape [None]
+        else:
+            self.y = T.fvector(name='y')  # output shape [self.output_dim]
 
         self.num_words = self.x.shape[0]  # total number of nodes (leaves + internal) in tree
         emb_x = self.embeddings[self.x]
         emb_x = emb_x * T.neq(self.x, -1).dimshuffle(0, 'x')  # zero-out non-existent embeddings
 
-        self.final_state = self.compute_tree(emb_x, self.tree)
+        self.tree_states = self.compute_tree(emb_x, self.tree)
+        self.final_state = self.tree_states[-1]
+        if labels_on_nonroot_nodes:
+            self.output_fn = self.create_output_fn_multi()
+            self.pred_y = self.output_fn(self.tree_states)
+            self.loss = self.loss_fn_multi(self.y, self.pred_y, self.y_exists)
+        else:
+            self.output_fn = self.create_output_fn()
+            self.pred_y = self.output_fn(self.final_state)
+            self.loss = self.loss_fn(self.y, self.pred_y)
 
-        self.pred_y = self.activation(
-            T.dot(self.W_out, self.final_state) + self.b_out)
-        self.loss = self.loss_fn(self.y, self.pred_y)
+        updates = self.gradient_descent(self.loss)
 
-        self.grad = T.grad(self.loss, self.params)
-        updates = [(param, param - self.learning_rate * grad)
-                   for param, grad in zip(self.params, self.grad)]
-
-        self._train = theano.function([self.x, self.tree, self.y],
+        train_inputs = [self.x, self.tree, self.y]
+        if labels_on_nonroot_nodes:
+            train_inputs.append(self.y_exists)
+        self._train = theano.function(train_inputs,
                                       [self.loss, self.pred_y],
                                       updates=updates)
 
@@ -195,12 +238,15 @@ class TreeRNN(object):
         self._predict = theano.function([self.x, self.tree],
                                         self.pred_y)
 
-    def train_step_inner(self, x, tree, y):
+    def _check_input(self, x, tree):
         assert np.array_equal(tree[:, -1], np.arange(len(x) - len(tree), len(x)))
         assert np.all((tree[:, 0] + 1 >= np.arange(len(tree))) |
                       (tree[:, 0] == -1))
         assert np.all((tree[:, 1] + 1 >= np.arange(len(tree))) |
                       (tree[:, 1] == -1))
+
+    def train_step_inner(self, x, tree, y):
+        self._check_input(x, tree)
         return self._train(x, tree[:, :-1], y)
 
     def train_step(self, root_node, y):
@@ -209,20 +255,12 @@ class TreeRNN(object):
 
     def evaluate(self, root_node):
         x, tree = gen_nn_inputs(root_node, max_degree=self.degree, only_leaves_have_vals=False)
-        assert np.array_equal(tree[:, -1], np.arange(len(x) - len(tree), len(x)))
-        assert np.all((tree[:, 0] + 1 >= np.arange(len(tree))) |
-                      (tree[:, 0] == -1))
-        assert np.all((tree[:, 1] + 1 >= np.arange(len(tree))) |
-                      (tree[:, 1] == -1))
+        self._check_input(x, tree)
         return self._evaluate(x, tree[:, :-1])
 
     def predict(self, root_node):
         x, tree = gen_nn_inputs(root_node, max_degree=self.degree, only_leaves_have_vals=False)
-        assert np.array_equal(tree[:, -1], np.arange(len(x) - len(tree), len(x)))
-        assert np.all((tree[:, 0] + 1 >= np.arange(len(tree))) |
-                      (tree[:, 0] == -1))
-        assert np.all((tree[:, 1] + 1 >= np.arange(len(tree))) |
-                      (tree[:, 1] == -1))
+        self._check_input(x, tree)
         return self._predict(x, tree[:, :-1])
 
     def init_matrix(self, shape):
@@ -230,6 +268,27 @@ class TreeRNN(object):
 
     def init_vector(self, shape):
         return np.zeros(shape, dtype=theano.config.floatX)
+
+    def create_output_fn(self):
+        self.W_out = theano.shared(self.init_matrix([self.output_dim, self.hidden_dim]))
+        self.b_out = theano.shared(self.init_vector([self.output_dim]))
+        self.params.extend([self.W_out, self.b_out])
+
+        def fn(final_state):
+            return T.nnet.softmax(
+                T.dot(self.W_out, final_state) + self.b_out)
+        return fn
+
+    def create_output_fn_multi(self):
+        self.W_out = theano.shared(self.init_matrix([self.output_dim, self.hidden_dim]))
+        self.b_out = theano.shared(self.init_vector([self.output_dim]))
+        self.params.extend([self.W_out, self.b_out])
+
+        def fn(tree_states):
+            return T.nnet.softmax(
+                T.dot(tree_states, self.W_out.T) +
+                self.b_out.dimshuffle('x', 0))
+        return fn
 
     def create_recursive_unit(self):
         self.W_hx = theano.shared(self.init_matrix([self.hidden_dim, self.emb_dim]))
@@ -255,7 +314,7 @@ class TreeRNN(object):
         num_leaves = self.num_words - num_nodes
 
         # compute leaf hidden states
-        node_h, _ = theano.map(
+        leaf_h, _ = theano.map(
             fn=self.leaf_unit,
             sequences=[emb_x[:num_leaves]])
 
@@ -271,14 +330,31 @@ class TreeRNN(object):
         dummy = theano.shared(self.init_vector([self.hidden_dim]))
         (_, parent_h), _ = theano.scan(
             fn=_recurrence,
-            outputs_info=[node_h, dummy],
+            outputs_info=[leaf_h, dummy],
             sequences=[emb_x[num_leaves:], tree, T.arange(num_nodes)],
             n_steps=num_nodes)
 
-        return parent_h[-1]
-
-    def activation(self, inp):
-        return T.nnet.sigmoid(inp)
+        return T.concatenate([leaf_h, parent_h], axis=0)
 
     def loss_fn(self, y, pred_y):
         return T.sum(T.sqr(y - pred_y))
+
+    def loss_fn_multi(self, y, pred_y, y_exists):
+        return T.sum(T.sum(T.sqr(y - pred_y), axis=1) * y_exists, axis=0)
+
+    def gradient_descent(self, loss):
+        """Momentum GD with gradient clipping."""
+        grad = T.grad(loss, self.params)
+        self.momentum_velocity_ = [0.] * len(self.grad)
+        grad_norm = T.sqrt(sum(map(lambda x: T.sqr(x).sum(), grad)))
+        updates = OrderedDict()
+        not_finite = T.or_(T.isnan(grad_norm), T.isinf(grad_norm))
+        scaling_den = T.maximum(5.0, grad_norm)
+        for n, (param, grad) in enumerate(zip(self.params, grad)):
+            grad = T.switch(not_finite, 0.1 * param,
+                            grad * (5.0 / scaling_den))
+            velocity = self.momentum_velocity_[n]
+            update_step = self.momentum * velocity - self.learning_rate * grad
+            self.momentum_velocity_[n] = update_step
+            updates[param] = param + update_step
+        return updates
