@@ -110,3 +110,7 @@ def evaluate_dataset(model, data):
         num_correct += (label == np.argmax(pred_y))
 
     return float(num_correct) / len(data)
+
+
+if __name__ == '__main__':
+    train()
