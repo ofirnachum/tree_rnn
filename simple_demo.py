@@ -30,7 +30,8 @@ def get_groundtruth_model():
 
 
 def get_groundtruth_label(root_node, model):
-    return model.predict(root_node)
+    label = model.predict(root_node)
+    return label.reshape((-1,))
 
 
 def get_random_binary_tree(min_depth, max_depth, num_vals, child_prob=0.7, _cur_depth=0):

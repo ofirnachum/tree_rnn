@@ -345,7 +345,7 @@ class TreeRNN(object):
     def gradient_descent(self, loss):
         """Momentum GD with gradient clipping."""
         grad = T.grad(loss, self.params)
-        self.momentum_velocity_ = [0.] * len(self.grad)
+        self.momentum_velocity_ = [0.] * len(grad)
         grad_norm = T.sqrt(sum(map(lambda x: T.sqr(x).sum(), grad)))
         updates = OrderedDict()
         not_finite = T.or_(T.isnan(grad_norm), T.isinf(grad_norm))
