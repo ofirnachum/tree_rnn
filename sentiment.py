@@ -8,9 +8,10 @@ import theano
 from theano import tensor as T
 import random
 import pickle
+import os
 
 DIR = '../treelstm/data/sst'
-GLOVE_DIR '../treelstm/data'  # should include .npy files of glove vecs and words
+GLOVE_DIR = '../treelstm/data'  # should include .npy files of glove vecs and words
 FINE_GRAINED = False
 DEPENDENCY = False
 SEED = 88
