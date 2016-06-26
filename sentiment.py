@@ -42,24 +42,29 @@ class SentimentModel(tree_lstm.ChildSumTreeLSTM):
         return T.sum(T.nnet.categorical_crossentropy(pred_y, y) * y_exists)
 
 
-def get_model(num_emb, output_dim):
+def get_model(num_emb, output_dim, max_degree):
     return SentimentModel(
         num_emb, EMB_DIM, HIDDEN_DIM, output_dim,
-        degree=2, learning_rate=LEARNING_RATE,
+        degree=max_degree, learning_rate=LEARNING_RATE,
         trainable_embeddings=True,
-        labels_on_nonroot_nodes=True)
+        labels_on_nonroot_nodes=True,
+        irregular_tree=DEPENDENCY)
 
 def train():
     vocab, data = data_utils.read_sentiment_dataset(DIR, FINE_GRAINED, DEPENDENCY)
 
     train_set, dev_set, test_set = data['train'], data['dev'], data['test']
+    max_degree = data['max_degree']
     print 'train', len(train_set)
     print 'dev', len(dev_set)
     print 'test', len(test_set)
+    print 'max degree', max_degree
 
     num_emb = vocab.size()
     num_labels = 5 if FINE_GRAINED else 3
-    for _, dataset in data.items():
+    for key, dataset in data.items():
+        if key == 'max_degree':
+            continue
         labels = [label for _, label in dataset]
         assert set(labels) <= set(xrange(num_labels)), set(labels)
     print 'num emb', num_emb
@@ -67,7 +72,7 @@ def train():
 
     random.seed(SEED)
     np.random.seed(SEED)
-    model = get_model(num_emb, num_labels)
+    model = get_model(num_emb, num_labels, max_degree)
 
     # initialize model embeddings to glove
     embeddings = model.embeddings.get_value()

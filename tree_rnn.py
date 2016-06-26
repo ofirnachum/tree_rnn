@@ -185,7 +185,8 @@ class TreeRNN(object):
     def __init__(self, num_emb, emb_dim, hidden_dim, output_dim,
                  degree=2, learning_rate=0.01, momentum=0.9,
                  trainable_embeddings=True,
-                 labels_on_nonroot_nodes=False):
+                 labels_on_nonroot_nodes=False,
+                 irregular_tree=False):
         assert emb_dim > 1 and hidden_dim > 1
         self.num_emb = num_emb
         self.emb_dim = emb_dim
@@ -194,6 +195,7 @@ class TreeRNN(object):
         self.degree = degree
         self.learning_rate = learning_rate
         self.momentum = momentum
+        self.irregular_tree = irregular_tree
 
         self.params = []
         self.embeddings = theano.shared(self.init_matrix([self.num_emb, self.emb_dim]))
@@ -240,10 +242,11 @@ class TreeRNN(object):
 
     def _check_input(self, x, tree):
         assert np.array_equal(tree[:, -1], np.arange(len(x) - len(tree), len(x)))
-        assert np.all((tree[:, 0] + 1 >= np.arange(len(tree))) |
-                      (tree[:, 0] == -1))
-        assert np.all((tree[:, 1] + 1 >= np.arange(len(tree))) |
-                      (tree[:, 1] == -1))
+        if not self.irregular_tree:
+            assert np.all((tree[:, 0] + 1 >= np.arange(len(tree))) |
+                          (tree[:, 0] == -1))
+            assert np.all((tree[:, 1] + 1 >= np.arange(len(tree))) |
+                          (tree[:, 1] == -1))
 
     def train_step_inner(self, x, tree, y):
         self._check_input(x, tree)
@@ -317,11 +320,16 @@ class TreeRNN(object):
         leaf_h, _ = theano.map(
             fn=self.leaf_unit,
             sequences=[emb_x[:num_leaves]])
+        if self.irregular_tree:
+            init_node_h = T.concatenate([leaf_h, leaf_h], axis=0)
+        else:
+            init_node_h = leaf_h
 
         # use recurrence to compute internal node hidden states
         def _recurrence(cur_emb, node_info, t, node_h, last_h):
             child_exists = node_info > -1
-            child_h = node_h[node_info - child_exists * t] * child_exists.dimshuffle(0, 'x')
+            offset = num_leaves * int(self.irregular_tree) - child_exists * t
+            child_h = node_h[node_info + offset] * child_exists.dimshuffle(0, 'x')
             parent_h = self.recursive_unit(cur_emb, child_h, child_exists)
             node_h = T.concatenate([node_h,
                                     parent_h.reshape([1, self.hidden_dim])])
@@ -330,7 +338,7 @@ class TreeRNN(object):
         dummy = theano.shared(self.init_vector([self.hidden_dim]))
         (_, parent_h), _ = theano.scan(
             fn=_recurrence,
-            outputs_info=[leaf_h, dummy],
+            outputs_info=[init_node_h, dummy],
             sequences=[emb_x[num_leaves:], tree, T.arange(num_nodes)],
             n_steps=num_nodes)
 

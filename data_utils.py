@@ -19,13 +19,14 @@ def read_sentiment_dataset(data_dir, fine_grained=False, dependency=False):
     test_dir = os.path.join(data_dir, 'test')
 
     data = {}
+    overall_max_degree = 0
     for name, sub_dir in zip(['train', 'dev', 'test'], [train_dir, dev_dir, test_dir]):
         if dependency:
-            trees = read_trees(
+            max_degree, trees = read_trees(
                 os.path.join(sub_dir, 'dparents.txt'),
                 os.path.join(sub_dir, 'dlabels.txt'))
         else:
-            trees = read_trees(
+            max_degree, trees = read_trees(
                 os.path.join(sub_dir, 'parents.txt'),
                 os.path.join(sub_dir, 'labels.txt'))
         sentences = read_sentences(
@@ -41,7 +42,10 @@ def read_sentiment_dataset(data_dir, fine_grained=False, dependency=False):
             _remap_tokens_and_labels(tree, sentence, fine_grained)
 
         data[name] = [(tree, tree.label) for tree, _ in this_dataset]
+        overall_max_degree = max(overall_max_degree, max_degree)
 
+    data['max_degree'] = overall_max_degree
+    assert overall_max_degree == 2 or dependency
     return vocab, data
 
 
@@ -94,6 +98,7 @@ class Vocab(object):
 
 def read_trees(parents_file, labels_file):
     trees = []
+    max_degree = 0
     with open(parents_file, 'r') as parents_f:
         with open(labels_file, 'r') as labels_f:
             while True:
@@ -103,8 +108,10 @@ def read_trees(parents_file, labels_file):
                     break
                 cur_parents = [int(p) for p in cur_parents.strip().split()]
                 cur_labels = [int(l) if l != '#' else None for l in cur_labels.strip().split()]
-                trees.append(read_tree(cur_parents, cur_labels))
-    return trees
+                cur_max_degree, cur_tree = read_tree(cur_parents, cur_labels)
+                max_degree = max(max_degree, cur_max_degree)
+                trees.append(cur_tree)
+    return max_degree, trees
 
 
 def read_tree(parents, labels):
@@ -125,7 +132,6 @@ def read_tree(parents, labels):
 
                 parent = parents[idx]
                 if parent in nodes:
-                    assert len(nodes[parent].children) < 2
                     nodes[parent].add_child(node)
                     break
                 elif parent == -1:
@@ -135,11 +141,9 @@ def read_tree(parents, labels):
                 prev = node
                 idx = parent
 
-    # ensure tree is completely binary
-    for node in nodes.itervalues():
-        if not node.children:
-            continue
-        assert len(node.children) == 2
+    # ensure tree is connected
+    num_roots = sum(node.parent is None for node in nodes.itervalues())
+    assert num_roots == 1, num_roots
 
     # overwrite vals to match sentence indices -
     # only leaves correspond to sentence tokens
@@ -151,7 +155,9 @@ def read_tree(parents, labels):
             node.val = leaf_idx
             leaf_idx += 1
 
-    return root
+    max_degree = max(len(node.children) for node in nodes.itervalues())
+
+    return max_degree, root
 
 
 def read_sentences(path, vocab):

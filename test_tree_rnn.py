@@ -10,7 +10,8 @@ class DummyTreeRNN(tree_rnn.TreeRNN):
 
     def create_recursive_unit(self):
         def unit(parent_x, child_h, child_exists):  # assumes emb_dim == hidden_dim
-            return parent_x + T.prod(child_h, axis=0)
+            return parent_x + T.prod((child_h - 1) * child_exists.dimshuffle(0, 'x') + 1,
+                                     axis=0)
         return unit
 
     def create_leaf_unit(self):
@@ -127,3 +128,23 @@ def test_tree_rnn_var_degree():
 
     # check step works without error
     model.train_step(root, np.array([0]).astype(theano.config.floatX))
+
+
+def test_irregular_tree():
+    model = DummyTreeRNN(8, 2, 2, 1, degree=4, irregular_tree=True)
+    emb = model.embeddings.get_value()
+
+    root = tree_rnn.Node(3)
+    c1 = tree_rnn.Node(1)
+    c2 = tree_rnn.Node(2)
+    c3 = tree_rnn.Node(3)
+    c4 = tree_rnn.Node(4)
+    c5 = tree_rnn.Node(5)
+    c6 = tree_rnn.Node(6)
+    root.add_children([c1, c2, c3, c4])
+    c1.add_children([c5])
+    c5.add_children([c6])
+
+    root_emb = model.evaluate(root)
+    expected = emb[3] + emb[2] * emb[3] * emb[4] * (emb[1] + emb[5] + emb[6])
+    assert_array_almost_equal(expected, root_emb)
