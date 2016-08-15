@@ -12,7 +12,7 @@ methods.
 You may immediately run "dummy" demos via simple_demo.py and
 modulo_demo.py.
 
-Code for evaluation on the Standford Sentiment Treebank (used by
+Code for evaluation on the Stanford Sentiment Treebank (used by
 the paper) is also available in sentiment.py.  To run this, you'll
 need to download the relevant data.
 
@@ -42,7 +42,7 @@ we'll preprocess the word vectors:
     np.save('../treelstm/data/words.npy', words)
     np.save('../treelstm/data/glove.npy', embeddings)
 
-After exitting the Python shell, you can run the sentiment training
+After exiting the Python shell, you can run the sentiment training
 directly
 
     python sentiment.py
